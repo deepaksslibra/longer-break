@@ -4,7 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { ChevronDown, ChevronUp } from "lucide-react"
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 
 interface Holiday {
   id: string;
@@ -15,9 +18,99 @@ interface Holiday {
   day: string;
 }
 
+interface BreakOpportunity {
+  startDate: Date;
+  endDate: Date;
+  totalDays: number;
+  leaveDays: Date[];
+  holidays: Holiday[];
+  efficiency: number; // total days / leaves required
+  score: number;
+}
+
+// Helper function to check if a date is a weekend
+const isWeekend = (date: Date): boolean => {
+  const day = date.getDay();
+  return day === 0 || day === 6; // 0 is Sunday, 6 is Saturday
+};
+
+// Helper function to check if a date matches a holiday
+const isHoliday = (date: Date, holidays: Holiday[]): Holiday | undefined => {
+  return holidays.find(h => 
+    h.isSelected && new Date(h.date).toDateString() === date.toDateString()
+  );
+};
+
+// Helper function to format date range
+const formatDateRange = (start: Date, end: Date): string => {
+  const options: Intl.DateTimeFormatOptions = { 
+    weekday: 'short', 
+    month: 'short', 
+    day: 'numeric' 
+  };
+  return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', options)}`;
+};
+
+// Add this helper function after the existing helper functions
+const getDayType = (date: Date, holidays: Holiday[], leaveDays: Date[]): {
+  type: 'weekend' | 'holiday' | 'leave' | 'workday';
+  holiday?: Holiday;
+} => {
+  if (isWeekend(date)) return { type: 'weekend' };
+  
+  const holiday = holidays.find(h => 
+    new Date(h.date).toDateString() === date.toDateString()
+  );
+  if (holiday) return { type: 'holiday', holiday };
+
+  if (leaveDays.some(leave => leave.toDateString() === date.toDateString())) {
+    return { type: 'leave' };
+  }
+
+  return { type: 'workday' };
+};
+
+// Add new helper function to calculate break pattern score
+const getBreakPatternScore = (
+  startDate: Date,
+  endDate: Date,
+  leaveDays: Date[],
+  holidays: Holiday[]
+): number => {
+  const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  const efficiency = totalDays / (leaveDays.length || 1);
+  
+  // Bonus for breaks that include weekends
+  const includesWeekend = leaveDays.some(date => {
+    const friday = new Date(date);
+    friday.setDate(date.getDate() + 1);
+    const monday = new Date(date);
+    monday.setDate(date.getDate() - 1);
+    return isWeekend(friday) || isWeekend(monday);
+  });
+
+  // Bonus for breaks that connect multiple holidays
+  const uniqueHolidays = new Set(holidays.map(h => h.date)).size;
+
+  // Calculate base score
+  let score = efficiency;
+
+  // Add bonuses
+  if (includesWeekend) score *= 1.2;
+  if (uniqueHolidays > 1) score *= (1 + (uniqueHolidays * 0.1));
+  if (totalDays >= 7) score *= 1.3; // Bonus for week-long breaks
+  if (leaveDays.length <= 2) score *= 1.1; // Bonus for efficient short breaks
+
+  return score;
+};
+
 export default function Home() {
+  const router = useRouter()
   const [selectedCountry, setSelectedCountry] = useState<string>("")
   const [selectedState, setSelectedState] = useState<string>("")
+  const [breakOpportunities, setBreakOpportunities] = useState<BreakOpportunity[]>([])
+  const [showAllOpportunities, setShowAllOpportunities] = useState(false)
+  const [isHolidaysOpen, setIsHolidaysOpen] = useState(false)
   
   // Karnataka 2025 holidays
   const [holidays, setHolidays] = useState<Holiday[]>([
@@ -57,27 +150,149 @@ export default function Home() {
     ))
   }
 
+  const findBreakOpportunities = () => {
+    const selectedHolidays = holidays.filter(h => h.isSelected);
+    const opportunities: BreakOpportunity[] = [];
+    
+    // Sort holidays by date
+    const sortedHolidays = [...selectedHolidays].sort((a, b) => 
+      new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+
+    // Look for different types of break patterns
+    sortedHolidays.forEach(holiday => {
+      const holidayDate = new Date(holiday.date);
+      
+      // Look for opportunities in different windows
+      const searchWindows = [
+        { start: -3, end: 3 },   // Week-centered breaks
+        { start: -7, end: 7 },   // Extended breaks
+        { start: -2, end: 5 },   // Long weekend style
+        { start: -4, end: 4 },   // Mid-week breaks
+      ];
+
+      searchWindows.forEach(window => {
+        for (let startOffset = window.start; startOffset <= 0; startOffset++) {
+          for (let endOffset = 0; endOffset <= window.end; endOffset++) {
+            const startDate = new Date(holidayDate);
+            startDate.setDate(holidayDate.getDate() + startOffset);
+            
+            const endDate = new Date(holidayDate);
+            endDate.setDate(holidayDate.getDate() + endOffset);
+
+            if (endDate <= startDate) continue;
+
+            const leaveDays: Date[] = [];
+            const breakHolidays: Holiday[] = [];
+
+            // Check each day in the range
+            const currentDate = new Date(startDate);
+            while (currentDate <= endDate) {
+              const isWeekendDay = isWeekend(currentDate);
+              const holidayMatch = isHoliday(currentDate, selectedHolidays);
+
+              if (!isWeekendDay && !holidayMatch) {
+                leaveDays.push(new Date(currentDate));
+              }
+
+              if (holidayMatch) {
+                breakHolidays.push(holidayMatch);
+              }
+
+              currentDate.setDate(currentDate.getDate() + 1);
+            }
+
+            // Consider breaks with different criteria
+            const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+            
+            if ((leaveDays.length <= 4 && breakHolidays.length > 0 && totalDays >= 3) || // Standard breaks
+                (leaveDays.length <= 2 && totalDays >= 4) || // Efficient short breaks
+                (leaveDays.length <= 6 && breakHolidays.length >= 2)) { // Extended multi-holiday breaks
+              
+              const efficiency = totalDays / (leaveDays.length || 1);
+              const score = getBreakPatternScore(startDate, endDate, leaveDays, breakHolidays);
+
+              opportunities.push({
+                startDate,
+                endDate,
+                totalDays,
+                leaveDays,
+                holidays: breakHolidays,
+                efficiency,
+                score // Add score to the interface
+              });
+            }
+          }
+        }
+      });
+    });
+
+    // Find unique break patterns by comparing date ranges
+    const uniqueOpportunities = opportunities.reduce((acc, curr) => {
+      const dateKey = `${curr.startDate.toISOString()}-${curr.endDate.toISOString()}`;
+      if (!acc[dateKey] || acc[dateKey].score < curr.score) {
+        acc[dateKey] = curr;
+      }
+      return acc;
+    }, {} as Record<string, BreakOpportunity>);
+
+    // Sort by score and take top results with variety
+    const bestOpportunities = Object.values(uniqueOpportunities)
+      .sort((a, b) => b.score - a.score)
+      .reduce((acc, curr) => {
+        // Ensure variety by checking if we already have a similar pattern
+        const hasSimilarPattern = acc.some(opp => 
+          Math.abs(opp.totalDays - curr.totalDays) <= 1 &&
+          Math.abs(opp.leaveDays.length - curr.leaveDays.length) <= 1
+        );
+
+        if (!hasSimilarPattern || acc.length < 2) {
+          acc.push(curr);
+        }
+
+        return acc;
+      }, [] as BreakOpportunity[])
+      .slice(0, 5); // Get top 5 varied opportunities
+
+    // Convert dates to strings for URL
+    const serializedOpportunities = bestOpportunities.map(opp => ({
+      ...opp,
+      startDate: opp.startDate.toISOString(),
+      endDate: opp.endDate.toISOString(),
+      leaveDays: opp.leaveDays.map(d => d.toISOString())
+    }));
+
+    // Encode the opportunities data for the URL
+    const searchParams = new URLSearchParams();
+    searchParams.set('data', JSON.stringify(serializedOpportunities));
+    
+    router.push(`/results?${searchParams.toString()}`);
+  };
+
   const hasLocationSelected = selectedCountry && selectedState
 
   const guaranteedHolidays = holidays.filter(h => h.type === 'National' || h.type === 'Regional')
   const probableHolidays = holidays.filter(h => h.type === 'Optional' || h.type === 'Restricted')
 
-  return (
-    <div className="min-h-screen bg-background p-8">
-      {/* Header */}
-      <div className="container mx-auto mb-8">
-        <h1 className="text-4xl font-bold text-center mb-2">Longer Break</h1>
-        <p className="text-muted-foreground text-center">Find the perfect time for your extended breaks</p>
-      </div>
+  const selectedHolidayCount = holidays.filter(h => h.isSelected).length
+  const displayedOpportunities = showAllOpportunities ? breakOpportunities : breakOpportunities.slice(0, 3)
 
-      <div className="container mx-auto grid gap-6">
+  return (
+    <div className="min-h-screen bg-background">
+      <div className="container max-w-2xl mx-auto px-4 py-6 space-y-6">
+        {/* Header */}
+        <div className="py-2">
+          <h1 className="text-3xl font-bold tracking-tight text-center">Longer Break</h1>
+          <p className="text-sm text-muted-foreground text-center mt-1.5">Find the perfect time for your extended breaks</p>
+        </div>
+
         {/* Location Selection */}
-        <Card className="max-w-xl mx-auto">
-          <CardHeader>
-            <CardTitle>Location</CardTitle>
+        <Card className="border-0 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold tracking-tight">Location</CardTitle>
             <CardDescription>Select your country and state to find local holidays</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-6">
             <div className="space-y-2">
               <label className="text-sm font-medium">Country</label>
               <Select value={selectedCountry} onValueChange={setSelectedCountry}>
@@ -86,8 +301,6 @@ export default function Home() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="in">India</SelectItem>
-                  <SelectItem value="us">United States</SelectItem>
-                  <SelectItem value="uk">United Kingdom</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -99,18 +312,7 @@ export default function Home() {
                 </SelectTrigger>
                 <SelectContent>
                   {selectedCountry === "in" && (
-                    <>
-                      <SelectItem value="ka">Karnataka</SelectItem>
-                      <SelectItem value="mh">Maharashtra</SelectItem>
-                      <SelectItem value="dl">Delhi</SelectItem>
-                    </>
-                  )}
-                  {selectedCountry === "us" && (
-                    <>
-                      <SelectItem value="ca">California</SelectItem>
-                      <SelectItem value="ny">New York</SelectItem>
-                      <SelectItem value="tx">Texas</SelectItem>
-                    </>
+                    <SelectItem value="ka">Karnataka</SelectItem>
                   )}
                 </SelectContent>
               </Select>
@@ -119,119 +321,126 @@ export default function Home() {
         </Card>
 
         {hasLocationSelected && (
-          <div className="grid gap-6 md:grid-cols-2">
-            {/* Guaranteed Holidays List */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Guaranteed Public Holidays</CardTitle>
-                <CardDescription>Official holidays declared by the government</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {guaranteedHolidays.map((holiday) => (
-                    <div key={holiday.id} className="flex items-center space-x-4 py-2 border-b last:border-0">
-                      <Checkbox 
-                        id={holiday.id}
-                        checked={holiday.isSelected}
-                        onCheckedChange={() => toggleHoliday(holiday.id)}
-                      />
-                      <div className="flex-1">
-                        <label
-                          htmlFor={holiday.id}
-                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                        >
-                          {holiday.name}
-                        </label>
-                        <p className="text-sm text-muted-foreground">
-                          {holiday.day}, {new Date(holiday.date).toLocaleDateString('en-US', {
-                            month: 'long',
-                            day: 'numeric'
-                          })}
-                        </p>
-                      </div>
-                      <span className={`text-xs px-2 py-1 rounded ${
-                        holiday.type === 'National' 
-                          ? 'bg-blue-100 text-blue-800' 
-                          : 'bg-green-100 text-green-800'
-                      }`}>
-                        {holiday.type}
-                      </span>
+          <>
+            {/* Holiday Selection */}
+            <Card className="border-0 shadow-sm">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-bold">{selectedHolidayCount}</span>
+                      <span className="text-xl">Holidays</span>
                     </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Probable Holidays List */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Probable Holidays</CardTitle>
-                <CardDescription>Optional or restricted holidays based on company policy</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {probableHolidays.map((holiday) => (
-                    <div key={holiday.id} className="flex items-center space-x-4 py-2 border-b last:border-0">
-                      <Checkbox 
-                        id={holiday.id}
-                        checked={holiday.isSelected}
-                        onCheckedChange={() => toggleHoliday(holiday.id)}
-                      />
-                      <div className="flex-1">
-                        <label
-                          htmlFor={holiday.id}
-                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                        >
-                          {holiday.name}
-                        </label>
-                        <p className="text-sm text-muted-foreground">
-                          {holiday.day}, {new Date(holiday.date).toLocaleDateString('en-US', {
-                            month: 'long',
-                            day: 'numeric'
-                          })}
-                        </p>
-                      </div>
-                      <span className={`text-xs px-2 py-1 rounded ${
-                        holiday.type === 'Optional' 
-                          ? 'bg-orange-100 text-orange-800' 
-                          : 'bg-purple-100 text-purple-800'
-                      }`}>
-                        {holiday.type}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Company Holidays */}
-            <Card className="md:col-span-2">
-              <CardHeader>
-                <CardTitle>Company Holidays</CardTitle>
-                <CardDescription>Add your company&apos;s specific holidays</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
+                    <p className="text-base text-muted-foreground">2025</p>
+                  </div>
                   <Button 
-                    className="w-full"
                     variant="outline"
+                    size="lg"
+                    onClick={() => setIsHolidaysOpen(!isHolidaysOpen)}
+                    className="gap-1.5"
                   >
-                    + Add Company Holiday
+                    Customize
+                    <ChevronDown className={`h-4 w-4 transition-transform ${isHolidaysOpen ? "rotate-180" : ""}`} />
                   </Button>
                 </div>
               </CardContent>
-            </Card>
 
-            {/* Find Breaks Button */}
-            <div className="md:col-span-2 flex justify-center">
-              <Button 
-                size="lg" 
-                className="w-full md:w-auto"
-              >
-                Find Break Opportunities
-              </Button>
-            </div>
-          </div>
+              <Collapsible open={isHolidaysOpen} onOpenChange={setIsHolidaysOpen}>
+                <CollapsibleContent>
+                  <CardContent className="px-6 pb-6 space-y-8">
+                    {/* Guaranteed Holidays */}
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full bg-blue-600"></span>
+                          <h3 className="font-medium">Guaranteed</h3>
+                        </div>
+                        <span className="text-sm font-medium">
+                          {guaranteedHolidays.filter(h => h.isSelected).length}/{guaranteedHolidays.length}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {guaranteedHolidays.map((holiday) => (
+                          <div key={holiday.id} 
+                            className={`flex items-center gap-3 p-3 rounded-lg transition-colors ${
+                              holiday.isSelected ? 'bg-blue-50/50' : 'hover:bg-accent/50'
+                            }`}
+                          >
+                            <Checkbox 
+                              id={holiday.id}
+                              checked={holiday.isSelected}
+                              onCheckedChange={() => toggleHoliday(holiday.id)}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <label htmlFor={holiday.id} className="text-sm font-medium block">
+                                {holiday.name}
+                              </label>
+                              <p className="text-sm text-muted-foreground">
+                                {holiday.day}, {new Date(holiday.date).toLocaleDateString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric'
+                                })}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Optional Holidays */}
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full bg-orange-600"></span>
+                          <h3 className="font-medium">Optional</h3>
+                        </div>
+                        <span className="text-sm font-medium">
+                          {probableHolidays.filter(h => h.isSelected).length}/{probableHolidays.length}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {probableHolidays.map((holiday) => (
+                          <div key={holiday.id} 
+                            className={`flex items-center gap-3 p-3 rounded-lg transition-colors ${
+                              holiday.isSelected ? 'bg-orange-50/50' : 'hover:bg-accent/50'
+                            }`}
+                          >
+                            <Checkbox 
+                              id={holiday.id}
+                              checked={holiday.isSelected}
+                              onCheckedChange={() => toggleHoliday(holiday.id)}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <label htmlFor={holiday.id} className="text-sm font-medium block">
+                                {holiday.name}
+                              </label>
+                              <p className="text-sm text-muted-foreground">
+                                {holiday.day}, {new Date(holiday.date).toLocaleDateString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric'
+                                })}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </CardContent>
+                </CollapsibleContent>
+              </Collapsible>
+
+              <CardContent className="px-6 pb-6">
+                <Button 
+                  size="lg"
+                  variant="default"
+                  className="w-full font-medium text-base"
+                  onClick={findBreakOpportunities}
+                >
+                  Find Break Opportunities
+                </Button>
+              </CardContent>
+            </Card>
+          </>
         )}
       </div>
     </div>
