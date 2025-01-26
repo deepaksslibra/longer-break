@@ -4,8 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { ChevronDown, ChevronUp } from "lucide-react"
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
+import { ChevronDown } from "lucide-react"
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 
@@ -39,35 +39,6 @@ const isHoliday = (date: Date, holidays: Holiday[]): Holiday | undefined => {
   return holidays.find(h => 
     h.isSelected && new Date(h.date).toDateString() === date.toDateString()
   );
-};
-
-// Helper function to format date range
-const formatDateRange = (start: Date, end: Date): string => {
-  const options: Intl.DateTimeFormatOptions = { 
-    weekday: 'short', 
-    month: 'short', 
-    day: 'numeric' 
-  };
-  return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', options)}`;
-};
-
-// Add this helper function after the existing helper functions
-const getDayType = (date: Date, holidays: Holiday[], leaveDays: Date[]): {
-  type: 'weekend' | 'holiday' | 'leave' | 'workday';
-  holiday?: Holiday;
-} => {
-  if (isWeekend(date)) return { type: 'weekend' };
-  
-  const holiday = holidays.find(h => 
-    new Date(h.date).toDateString() === date.toDateString()
-  );
-  if (holiday) return { type: 'holiday', holiday };
-
-  if (leaveDays.some(leave => leave.toDateString() === date.toDateString())) {
-    return { type: 'leave' };
-  }
-
-  return { type: 'workday' };
 };
 
 // Add new helper function to calculate break pattern score
@@ -108,8 +79,6 @@ export default function Home() {
   const router = useRouter()
   const [selectedCountry, setSelectedCountry] = useState<string>("")
   const [selectedState, setSelectedState] = useState<string>("")
-  const [breakOpportunities, setBreakOpportunities] = useState<BreakOpportunity[]>([])
-  const [showAllOpportunities, setShowAllOpportunities] = useState(false)
   const [isHolidaysOpen, setIsHolidaysOpen] = useState(false)
   
   // Karnataka 2025 holidays
@@ -275,7 +244,6 @@ export default function Home() {
   const probableHolidays = holidays.filter(h => h.type === 'Optional' || h.type === 'Restricted')
 
   const selectedHolidayCount = holidays.filter(h => h.isSelected).length
-  const displayedOpportunities = showAllOpportunities ? breakOpportunities : breakOpportunities.slice(0, 3)
 
   return (
     <div className="min-h-screen bg-background">

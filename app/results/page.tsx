@@ -26,6 +26,16 @@ interface BreakOpportunity {
   score: number;
 }
 
+interface SerializedBreakOpportunity {
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+  leaveDays: string[];
+  holidays: Holiday[];
+  efficiency: number;
+  score: number;
+}
+
 // Helper functions
 const formatDateRange = (start: Date, end: Date): string => {
   const options: Intl.DateTimeFormatOptions = { 
@@ -76,13 +86,13 @@ export default function ResultsPage() {
     
     if (data) {
       try {
-        const parsedData = JSON.parse(data);
+        const parsedData = JSON.parse(data) as SerializedBreakOpportunity[];
         // Convert string dates back to Date objects
-        const hydratedOpportunities = parsedData.map((opp: any) => ({
+        const hydratedOpportunities = parsedData.map((opp) => ({
           ...opp,
           startDate: new Date(opp.startDate),
           endDate: new Date(opp.endDate),
-          leaveDays: opp.leaveDays.map((d: string) => new Date(d))
+          leaveDays: opp.leaveDays.map((d) => new Date(d))
         }));
         setOpportunities(hydratedOpportunities);
       } catch (error) {
