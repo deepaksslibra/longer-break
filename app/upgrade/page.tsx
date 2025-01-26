@@ -68,7 +68,7 @@ export default function UpgradePage() {
           <CardContent className="p-6">
             <div className="flex items-baseline justify-between mb-4">
               <div>
-                <h3 className="text-2xl font-bold">$2</h3>
+                <h3 className="text-2xl font-bold">$5</h3>
                 <p className="text-sm text-muted-foreground">One-time payment</p>
               </div>
               <p className="text-sm text-green-600 font-medium">Limited Time Offer</p>
